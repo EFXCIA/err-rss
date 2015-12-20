@@ -1,0 +1,10 @@
+[Core]
+Name = RSS
+Module = rss
+
+[Documentation]
+Description = Recieve RSS feeds in HipChat.
+
+[Python]
+Version = 3
+
