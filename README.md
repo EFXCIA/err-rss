@@ -6,17 +6,25 @@ An ErrBot plugin for RSS feeds.
 Dependencies
 ------------
 
- * TODO
+ * Requests
+ * Feedparser
+ * Arrow
 
 Features
 --------
 
- * TODO
+ * Watch feeds by url
+ * Ignore watched feeds by title
+ * List watched feeds
 
 Usage
 -----
 
- * TODO
+    !rss watch <url>
+    !rss list
+    !rss ignore <title>
+    !rss interval
+    !rss interval 30
 
 License
 -------
