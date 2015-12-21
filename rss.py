@@ -19,7 +19,7 @@ class Rss(BotPlugin):
         with open(os.path.expanduser('~/.err-rss.cfg')) as f:
             self.session.auth = tuple(f.read().splitlines())
         self.start_poller(self.INTERVAL, self.check_feeds)
-        
+
     def read_feed(self, url):
         try:
             r = self.session.get(url)
@@ -31,67 +31,88 @@ class Rss(BotPlugin):
 
     def check_feeds(self):
         """Check for any new feed entries."""
-        
+
         def since(t):
             t = arrow.get(t)
             return lambda e: arrow.get(e['published']) > t
 
-        # Report number of feeds.
         num_feeds = len(self.FEEDS)
-        msg = 'Checking {} feed'.format(num_feeds)
-        if num_feeds != 1:
-            msg += 's'
-        self.log.debug(msg)
+        if num_feeds == 0:
+            return
 
-        for data in self.FEEDS.values():
+        if num_feeds == 1:
+            msg = 'Checking {} feed...'
+        else:
+            msg = 'Checking {} feeds...'
+        self.log.info(msg.format(num_feeds))
+
+        responses = []
+        for title, data in self.FEEDS.items():
             feed = self.read_feed(data['url'])
             if not feed:
-                self.log.error('No feed found at {}'.format(data['url']))
+                self.log.error('[{}] No feed found!'.format(title))
                 continue
 
-            recent = since(data['last_check'])
-            recent_entries = tuple(filter(recent, feed['entries']))
-            
+            for entry in feed['entries']:
+                entry['when'] = arrow.get(entry['published']).humanize()
+
+            about_then = data['last_check'].humanize()
+            recent_entries = tuple(filter(since(data['last_check']),
+                                          feed['entries']))
+
             num_entries = len(feed['entries'])
             num_recent = len(recent_entries)
-            title = feed['feed']['title']
-            self.log.debug('Found {}/{} entries in {}'.format(num_recent,
-                                                              num_entries,
-                                                              title))
-            newest, *__, oldest = feed['entries']
-            data['last_check'] = arrow.get(newest['published'])
-            about_now = data['last_check'].humanize()
-            self.log.debug('Updating last check time to {}'.format(about_now))
-            
-            responses = []
-            for entry in recent_entries:
-                responses.append('[{title}]({link})'.format(**entry))
 
-            if responses:
-                response = '/me {} --- {}'.format('\n'.join(responses),
-                                                  about_now)
-                self.send(data['room'], response, message_type='groupchat')
+            entry_msg = '[{title}]({link}) --- {when}'
+            for entry in recent_entries:
+                responses.append((entry, entry_msg.format(**entry)))
+
+            newest, *__, oldest = feed['entries']
+
+            if recent_entries:
+                data['last_check'] = arrow.get(newest['published'])
+                about_now = data['last_check'].humanize()
+
+                if len(recent_entries) == 1:
+                    found_msg = '[{}] Found {} entry since {}'
+                else:
+                    found_msg = '[{}] Found {} entries since {}'
+                self.log.info(found_msg.format(title, num_recent, about_then))
+
+
+                last_check_update_msg = '[{}] Updating last check time to {}'
+                self.log.info(last_check_update_msg.format(title, about_now))
             else:
-                newest = arrow.get(newest['published']).humanize()
-                oldest = arrow.get(oldest['published']).humanize()
-                response = 'Entries from {} to {}'.format(newest, oldest)
-                self.log.debug(response)
-                # self.send(data['room'], response, message_type='groupchat')
+                none_msg = '[{}] Found {} entries since {}, but none since {}'
+                self.log.info(none_msg.format(title, num_entries,
+                                              oldest['when'], newest['when']))
+
+        results = sorted(responses, key=lambda e: arrow.get(e[0]['published']))
+        for entry, response in results:
+            # Can't use yield here since there's no incoming message.
+            self.send(data['room'], response, message_type='groupchat')
 
     @botcmd
     def rss_list(self, message, args):
         """List the currently watched feeds."""
-        for url, name in self.FEEDS.items():
-            yield '"{}" from <{}>'.format(url, name)
+        feeds = []
+        for name, data in self.FEEDS.items():
+            last_check = arrow.get(data['last_check']).humanize()
+            yield '/me [{}]({}) {}'.format(name, data['url'], last_check)
+        else:
+            yield "/me You haven't added any feeds :("
 
     @botcmd
     @arg_botcmd('url', type=str)
     def rss_watch(self, message, url):
         """Watch a new feed."""
         feed = None
-        while feed is None:
-            feed = self.read_feed(url)
-            time.sleep(1)
+        for __ in range(3):
+            while feed is None:
+                feed = self.read_feed(url)
+                time.sleep(1)
+        if feed is None:
+            return "/me couldn't find a feed at {}".format(url)
 
         name = feed['feed']['title']
         self.FEEDS[name] = {
@@ -111,8 +132,3 @@ class Rss(BotPlugin):
             return '/me ignoring [{}]({})'.format(name, data['url'])
         else:
             return "/me whatchu talkin' bout?'"
-
-    @botcmd
-    def rss_test(self, message, args):
-        import ipdb
-        ipdb.set_trace()
