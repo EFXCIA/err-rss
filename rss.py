@@ -199,7 +199,7 @@ class Rss(BotPlugin):
         # use yield/return here since there's no incoming message.
         msg = '[{title}]({link}) --- {when}'
         for entry in sorted(entries_to_report, key=published_date):
-            for room in entry['rooms']:
+            for room in entry['rooms'].values():
                 self.send(room, msg.format(**entry), message_type='groupchat')
 
     @botcmd
@@ -208,7 +208,7 @@ class Rss(BotPlugin):
 
         def in_this_room(item):
             title, data = item
-            return message.to in data['rooms']
+            return str(message.to) in data['rooms']
 
         for title, data in filter(in_this_room, self.FEEDS.items()):
             last_check = data['last_check'].humanize()
@@ -236,7 +236,7 @@ class Rss(BotPlugin):
                 self.log.debug('"{}" is not a match'.format(header))
 
         # Read in the feed.
-        data = {'url': url, 'config': config, 'rooms': set()}
+        data = {'url': url, 'config': config, 'rooms': {}}
         feed = self.read_feed(data)
         if feed is None:
             return "/me couldn't find a feed at {}".format(url)
@@ -245,11 +245,14 @@ class Rss(BotPlugin):
         title = feed['feed']['title']
         if title not in self.FEEDS:
             self.FEEDS[title] = data
-            if feed['entries']:
-                data['last_check'] = published_date(feed['entries'][0])
-            else:
+            try:
+                entry = feed['entries'][0]
+            except IndexError:
                 data['last_check'] = arrow.getnow()
-        self.FEEDS[title]['rooms'].add(message.to)
+            else:
+                data['last_check'] = read_date(published_date(entry))
+        self.FEEDS[title]['rooms'][str(message.to)] = message.to
+        self.log.info('Watching "{}" in "{}"'.format(title, str(message.to)))
 
         # Report new feed watch
         return '/me watching [{}]({})'.format(title, url)
