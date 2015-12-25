@@ -44,7 +44,7 @@ Note that the domain to section-header matching uses an "ends with" approach:
 	- `[.google.com]`
 	- `[google.com]`
  * `http://www.google.com/rss` is *not* matched by
-s	- `[maps.google.com]`
+	- `[maps.google.com]`
 
 Also note that wildcards are only supported if they are leading wildcards. For
 example, `[www.*.com]` would *not* match anything *except* `http://www.*.com`
