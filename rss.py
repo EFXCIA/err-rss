@@ -8,6 +8,7 @@ from operator import itemgetter
 import arrow
 import requests
 import feedparser
+import dateutil.parser as dparser
 from errbot import BotPlugin, botcmd, arg_botcmd
 
 
@@ -22,6 +23,10 @@ def since(target_time):
 
 def published_date(entry):
     return entry.get('published')
+
+
+def read_date(dt):
+    return arrow.get(dparser.parse(dt))
 
 
 class Rss(BotPlugin):
@@ -155,7 +160,7 @@ class Rss(BotPlugin):
 
             # Touch up each entry.
             for entry in feed['entries']:
-                entry['published'] = arrow.get(entry['published'])
+                entry['published'] = read_date(published_date(entry))
                 entry['when'] = entry['published'].humanize()
                 entry['rooms'] = data['rooms']  # used to report in right rooms
 
