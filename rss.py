@@ -3,6 +3,7 @@ import time
 import threading
 import configparser
 from urllib.parse import urlsplit
+from operator import itemgetter
 
 import arrow
 import requests
@@ -33,32 +34,52 @@ class Rss(BotPlugin):
         super().activate()
         self.session = requests.Session()
         self.read_ini(CONFIG_FILE)
-        # Manually use a timer, since the poller implementation in errbot is
-        # patently retarded (aka busted, broken, etc. etc.).
+        # Manually use a timer, since the poller implementation in errbot
+        # breaks if you try to change the polling interval.
         self.checker = None
         self.check_feeds()
-
-    def read_ini(self, filepath):
-        self.ini = configparser.ConfigParser()
-        self.ini.read(os.path.expanduser(filepath))
-
-    def schedule_next_check(self):
-        self.stop_checking_feeds()
-        self.log.info('Scheduling next check in {}s'.format(self.interval))
-        self.checker = threading.Timer(self.interval, self.check_feeds)
-        self.checker.start()
-
-    def stop_checking_feeds(self):
-        if self.checker:
-            self.log.info('Stopping any pending check')
-            self.checker.cancel()
 
     def deactivate(self):
         super().deactivate()
         self.stop_checking_feeds()
 
+    def read_ini(self, path):
+        """Read and store the configuration in the ini file at filepath.
+
+        Note: this method silently fails if given a nonsensicle filepath, but
+        it does log the number of sections it read.
+
+        :param str path: path to the ini file to use for configuration
+        """
+        self.ini = configparser.ConfigParser()
+        self.ini.read(os.path.expanduser(path))
+        self.log.info('Read {} sections from {}'.format(len(self.ini), path))
+
+    def schedule_next_check(self):
+        """Schedule the next feed check.
+
+        This method ensures any pending check for new feed entries is canceled
+        before scheduling the next one.
+        """
+        self.stop_checking_feeds()
+        if self.interval:
+            self.checker = threading.Timer(self.interval, self.check_feeds)
+            self.checker.start()
+            self.log.info('Scheduled next check in {}s'.format(self.interval))
+        else:
+            self.log.info('Scheduling disabled since interval is 0s.')
+
+    def stop_checking_feeds(self):
+        """Stop any pending check for new feed entries."""
+        if self.checker:
+            self.checker.cancel()
+            self.log.info('Pending check canceled.')
+        else:
+            self.log.info('No pending checks to cancel.')
+
     @property
     def interval(self):
+        """Number of seconds between checks for new feed entries."""
         return self.INTERVAL
 
     @interval.setter
@@ -69,7 +90,7 @@ class Rss(BotPlugin):
             self.schedule_next_check()
         else:
             self.INTERVAL = 0
-            self.log.info('Halting the checking of feeds.')
+            self.log.info('Scheduling disabled.')
             self.stop_checking_feeds()
 
     def read_feed(self, data, tries=3, patience=1):
@@ -78,29 +99,33 @@ class Rss(BotPlugin):
         If no feed can be found at the given url, return None.
 
         :param str url: url at which to find the feed
+        :param int tries: number of times to try fetching the feed
+        :param int patience: number of seconds to wait in between tries
         :return: parsed feed or None
         """
         if 'username' in data['config'] and 'password' in data['config']:
-            username = data['config']['username']
-            password = data['config']['password']
-            self.session.auth = username, password
+            get_creds = itemgetter('username', 'password')
+            self.session.auth = get_creds(data['config'])
 
         tries_left = tries
         while tries_left:
             try:
-                r = self.session.get(data['url'])
-                r.raise_for_status()
-                feed = feedparser.parse(r.text)
+                response = self.session.get(data['url'])
+                response.raise_for_status()
+                feed = feedparser.parse(response.text)
                 assert 'title' in feed['feed']
                 return feed
             except Exception as e:
                 self.log.error(str(e))
-                tries_left -= 1
-                time.sleep(patience)
+            tries_left -= 1
+            time.sleep(patience)
         return None
 
     def check_feeds(self, repeat=True):
-        """Check for any new feed entries."""
+        """Check for any new feed entries.
+
+        :param bool repeat: whether or not to schedule the next check
+        """
         self.log.info('Starting feed checker...')
         # First, schedule the next check.
         if repeat:
@@ -124,36 +149,47 @@ class Rss(BotPlugin):
                 self.log.error('[{}] No feed found!'.format(title))
                 continue
 
+            if not feed['entries']:
+                self.log.info('[{}] No entries yet.'.format(title))
+                continue
+
             # Touch up each entry.
             for entry in feed['entries']:
                 entry['published'] = arrow.get(entry['published'])
                 entry['when'] = entry['published'].humanize()
-                entry['room'] = data['room']  # used to report in right room
+                entry['rooms'] = data['rooms']  # used to report in right rooms
 
-            about_then = data['last_check'].humanize()
-            recent_entries = tuple(filter(since(data['last_check']),
-                                          feed['entries']))
-
+            # Find the oldest and newest entries for logging purposes.
             num_entries = len(feed['entries'])
+            if num_entries == 1:
+                newest = oldest = feed['entries'][0]
+            elif num_entries == 2:
+                newest, oldest = feed['entries']
+            else:
+                newest, *__, oldest = feed['entries']
+
+            # Find recent entries
+            is_recent = since(data['last_check'])
+            recent_entries = tuple(e for e in feed['entries'] if is_recent(e))
             num_recent = len(recent_entries)
-            newest, *__, oldest = feed['entries']
 
             if recent_entries:
+                # Add recent entries to report
                 entries_to_report.extend(recent_entries)
-                # Only update the last check time for this feed when there are
-                # recent entries.
-                data['last_check'] = newest['published']
-                about_now = newest['when']
-
                 if len(recent_entries) == 1:
                     found_msg = '[{}] Found {} entry since {}'
                 else:
                     found_msg = '[{}] Found {} entries since {}'
+                about_then = data['last_check'].humanize()
                 self.log.info(found_msg.format(title, num_recent, about_then))
 
-                self.log.info('[{}] Updating last check time to {}'
-                              .format(title, about_now))
+                # Only update the last check time for this feed when there are
+                # recent entries.
+                data['last_check'] = newest['published']
+                self.log.info('[{}] Updated last check time to {}'
+                              .format(title, newest['when']))
             else:
+                found_msg = '[{}] Found {} entry since {}'
                 self.log.info('[{}] Found {} entries since {}, '
                               'but none since {}'.format(title, num_entries,
                                                          oldest['when'],
@@ -163,24 +199,30 @@ class Rss(BotPlugin):
         # use yield/return here since there's no incoming message.
         msg = '[{title}]({link}) --- {when}'
         for entry in sorted(entries_to_report, key=published_date):
-            self.send(entry['room'], msg.format(**entry),
-                      message_type='groupchat')
+            for room in entry['rooms']:
+                self.send(room, msg.format(**entry), message_type='groupchat')
 
     @botcmd
     def rss_list(self, message, args):
         """List the currently watched feeds."""
-        for title, data in self.FEEDS.items():
-            last_check = arrow.get(data['last_check']).humanize()
-            yield '/me [{}]({}) {}'.format(title, data['url'], last_check)
+
+        def in_this_room(item):
+            title, data = item
+            return message.to in data['rooms']
+
+        for title, data in filter(in_this_room, self.FEEDS.items()):
+            last_check = data['last_check'].humanize()
+            yield '/me [{title}]({url}) {when}'.format(title=title,
+                                                       url=data['url'],
+                                                       when=last_check)
         else:
-            yield ("/me You don't have any feeds :( "
-                   "Add one by url (!rss watch <url>)")
+            yield '/me You have 0 feeds. Add one!'
 
     @botcmd
     @arg_botcmd('url', type=str)
     def rss_watch(self, message, url):
         """Watch a new feed."""
-        # Find the first matching ini section using the domain of the url.s
+        # Find the first matching ini section using the domain of the url.
         config = {}
         __, domain, *__ = urlsplit(url)
         self.log.debug('Finding ini section for domain "{}"...'.format(domain))
@@ -193,31 +235,35 @@ class Rss(BotPlugin):
             else:
                 self.log.debug('"{}" is not a match'.format(header))
 
-        data = {
-            'url': url,
-            'room': message.to,  # assumption: this is always a room
-            'config': config
-        }
+        # Read in the feed.
+        data = {'url': url, 'config': config, 'rooms': set()}
         feed = self.read_feed(data)
         if feed is None:
             return "/me couldn't find a feed at {}".format(url)
 
+        # Establish feed metadata.
         title = feed['feed']['title']
-        if feed['entries']:
-            data['last_check'] = arrow.get(feed['entries'][0]['published'])
-        else:
-            data['last_check'] = arrow.getnow()
-        self.FEEDS[title] = data
+        if title not in self.FEEDS:
+            self.FEEDS[title] = data
+            if feed['entries']:
+                data['last_check'] = arrow.get(feed['entries'][0]['published'])
+            else:
+                data['last_check'] = arrow.getnow()
+        self.FEEDS[title]['rooms'].add(message.to)
+
+        # Report new feed watch
         return '/me watching [{}]({})'.format(title, url)
 
     @botcmd
-    @arg_botcmd('name', type=str)
-    def rss_ignore(self, message, name):
+    @arg_botcmd('title', type=str)
+    def rss_ignore(self, message, title):
         """Ignore a currently watched feed."""
-        if name in self.FEEDS:
-            data = self.FEEDS[name]
-            del self.FEEDS[name]
-            return '/me ignoring [{}]({})'.format(name, data['url'])
+        if title in self.FEEDS and message.to in data['rooms']:
+            data = self.FEEDS[title]
+            data['rooms'].remove(message.to)
+            if not data['rooms']:
+                del self.FEEDS[title]
+            return '/me ignoring [{}]({})'.format(title, data['url'])
         else:
             return "/me whatchu talkin' bout?'"
 
