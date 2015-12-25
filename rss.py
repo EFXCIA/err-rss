@@ -246,7 +246,7 @@ class Rss(BotPlugin):
         if title not in self.FEEDS:
             self.FEEDS[title] = data
             if feed['entries']:
-                data['last_check'] = arrow.get(feed['entries'][0]['published'])
+                data['last_check'] = published_date(feed['entries'][0])
             else:
                 data['last_check'] = arrow.getnow()
         self.FEEDS[title]['rooms'].add(message.to)
