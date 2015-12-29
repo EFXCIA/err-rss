@@ -4,6 +4,7 @@ Err RSS CHANGELOG
 0.3.0
 -----
 
+ * [Robert Grant] - Fixed issue of bot not being able to respond in rooms
  * [Robert Grant] - Each feed can now service multiple rooms
  * [Robert Grant] - Improved logging capabilitiess
  * [Robert Grant] - Update readme with configuration examples
