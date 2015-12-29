@@ -50,6 +50,8 @@ class Rss(BotPlugin):
         # Manually use a timer, since the poller implementation in errbot
         # breaks if you try to change the polling interval.
         self.checker = None
+        then = arrow.get()
+        self.delta = arrow.get() - then
         self.check_feeds()
 
     def deactivate(self):
@@ -140,8 +142,18 @@ class Rss(BotPlugin):
 
         :param bool repeat: whether or not to schedule the next check
         """
+        start_time = arrow.get()
         self.log.info('Starting feed checker...')
-        # First, schedule the next check.
+
+        # Make sure to extend the interval if the last feed check took longer
+        # than the interval, then schedule the next check. Only problem with
+        # this is that it requires two checks to overlap before any adjustment
+        # is realized.
+        if self.delta.seconds >= self.interval:
+            self.log.info('Increasing the interval from {}s to {}s due to '
+                          'longer processing times'.format(self.interval,
+                                                           self.delta.seconds))
+            self.interval = self.delta.seconds
         if repeat:
             self.schedule_next_check()
 
@@ -214,7 +226,11 @@ class Rss(BotPlugin):
         msg = '[{title}]({link}) --- {when}'
         for entry in sorted(entries_to_report, key=published_date):
             for room in entry['rooms'].values():
-                self.send(room, msg.format(**entry), message_type='groupchat')
+                self.send(room.frm, msg.format(**entry), message_type=room.type)
+
+        # Record the time needed for the current set of feeds.
+        end_time = arrow.get()
+        self.delta = end_time - start_time
 
     @botcmd
     def rss_list(self, message, args):
@@ -265,8 +281,8 @@ class Rss(BotPlugin):
                 data['last_check'] = arrow.getnow()
             else:
                 data['last_check'] = read_date(published_date(entry))
-        self.FEEDS[title]['rooms'][str(message.to)] = message.to
-        self.log.info('Watching "{}" in "{}"'.format(title, str(message.to)))
+        self.FEEDS[title]['rooms'][message.frm.person] = message
+        self.log.info('Watching {!r} for {!s}'.format(title, message.frm))
 
         # Report new feed watch
         return '/me watching [{}]({})'.format(title, url)
@@ -275,14 +291,14 @@ class Rss(BotPlugin):
     @arg_botcmd('title', type=str)
     def rss_ignore(self, message, title):
         """Ignore a currently watched feed."""
-        if title in self.FEEDS and message.to in data['rooms']:
-            data = self.FEEDS[title]
-            data['rooms'].remove(message.to)
-            if not data['rooms']:
+        feed = self.FEEDS.get(title)
+        if feed and message.frm.person in feed['rooms']:
+            del feed['rooms'][message.frm.person]
+            if not feed['rooms']:
                 del self.FEEDS[title]
-            return '/me ignoring [{}]({})'.format(title, data['url'])
+            return '/me ignoring [{}]({})'.format(title, feed['url'])
         else:
-            return "/me whatchu talkin' bout?'"
+            return "/me whatchu talkin' bout?"
 
     @botcmd
     def rss_interval(self, message, interval=None):
