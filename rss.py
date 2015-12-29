@@ -29,6 +29,14 @@ def read_date(dt):
     return arrow.get(dparser.parse(dt))
 
 
+def try_method(f):
+    try:
+        return f()
+    except Exception as e:
+        self.log.error('Thread failed with: {}'.format(str(e)))
+        return None
+
+
 class Rss(BotPlugin):
     """RSS Feeder plugin for Errbot."""
 
@@ -68,7 +76,8 @@ class Rss(BotPlugin):
         """
         self.stop_checking_feeds()
         if self.interval:
-            self.checker = threading.Timer(self.interval, self.check_feeds)
+            job = lambda: try_method(self.check_feeds)
+            self.checker = threading.Timer(self.interval, job)
             self.checker.start()
             self.log.info('Scheduled next check in {}s'.format(self.interval))
         else:
