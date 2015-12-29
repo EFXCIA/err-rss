@@ -26,6 +26,7 @@ def published_date(entry):
 
 
 def read_date(dt):
+    """This reads a date in an unknown format."""
     return arrow.get(dparser.parse(dt))
 
 
