@@ -235,7 +235,7 @@ class Rss(BotPlugin):
 
     @botcmd
     def rss_list(self, message, args):
-        """List the currently watched feeds."""
+        """List the feeds being watched in this room."""
 
         def in_this_room(item):
             title, data = item
@@ -252,17 +252,14 @@ class Rss(BotPlugin):
     @botcmd
     @arg_botcmd('url', type=str)
     def rss_watch(self, message, url):
-        """Watch a new feed."""
-        # Find the first matching ini section using the domain of the url.
+        """Watch a new feed by URL."""
+        # Find the last matching ini section using the domain of the url.
         config = {}
-        __, domain, *__ = urlsplit(url)
-        self.log.debug('Finding ini section for domain "{}"...'.format(domain))
+        self.log.debug('Finding ini section for "{}"...'.format(url))
         for header, section in self.ini.items():
-            tail = header.lstrip('*')
-            if domain.endswith(tail):
-                self.log.debug('Matched "{}" to "{}"'.format(domain, header))
+            if header_matches_url(header, url):
                 config = dict(section)
-                break
+                self.log.debug('Matched "{}" to "{}"'.format(url, header))
             else:
                 self.log.debug('"{}" is not a match'.format(header))
 
@@ -291,7 +288,7 @@ class Rss(BotPlugin):
     @botcmd
     @arg_botcmd('title', type=str)
     def rss_ignore(self, message, title):
-        """Ignore a currently watched feed."""
+        """Ignore a currently watched feed by name."""
         feed = self.FEEDS.get(title)
         if feed and message.frm.person in feed['rooms']:
             del feed['rooms'][message.frm.person]
@@ -320,3 +317,19 @@ class Rss(BotPlugin):
                 self.interval = interval
                 return ('/me changed interval from '
                         '{}s to {}s'.format(old, self.interval))
+
+
+def header_matches_url(header, url):
+    # Here we compare the end of the domain and the start of the path (if
+    # present) to the header.
+    __, domain, path, *__ = urlsplit(url)
+    parts = header.lstrip('*').split('/', 1)
+    path = path.lstrip('/')
+    if len(parts) == 2:
+        # Domain and path in header. Match the path starts and domain ends.
+        header_domain, header_path = parts
+        return path.startswith(header_path) and domain.endswith(header_domain)
+    else:
+        # Domain without path. Match the domain ends.
+        header_domain, = parts
+        return domain.endswith(header_domain)
